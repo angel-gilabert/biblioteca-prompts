@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor de Prompts (Local)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #1a1a1a; color: #e0e0e0; }
+        .sidebar { transition: width 0.3s ease-in-out; }
+        .sidebar-collapsed { width: 0; padding: 0; overflow: hidden; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #2c2c2c; }
+        ::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #777; }
+        
+        /* Estilos generales de items */
+        .prompt-card, .folder-item-header { border: 1px solid #333; transition: all 0.2s ease; }
+        .prompt-card:hover, .folder-item-header:hover { border-color: #555; background-color: #252525; }
+        
+        /* Drag and Drop */
+        .ghost { opacity: 0.4; background: #3a3a3a; }
+        .drag-over-folder { border-color: #3b82f6 !important; background-color: rgba(59, 130, 246, 0.2) !important; }
+        
+        /* Vista de Cuadrícula */
+        .prompts-grid-view .prompt-card { height: 11rem; }
+        
+        /* Vista de Lista */
+        .prompts-list-view { display: flex; flex-direction: column; gap: 0.5rem; }
+        .prompts-list-view .prompt-card {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            height: auto;
+            padding: 0.75rem 1rem;
+        }
+        .prompts-list-view .prompt-card-content { flex-grow: 1; overflow: hidden; }
+        .prompts-list-view .prompt-title { white-space: nowrap; }
+        .prompts-list-view .prompt-text { display: none; } /* Ocultamos el texto en la vista de lista */
+        .prompts-list-view .prompt-actions { margin-top: 0; }
+
+        /* Carpetas Desplegables */
+        .folder-chevron { transition: transform 0.2s ease-in-out; }
+        .is-expanded .folder-chevron { transform: rotate(90deg); }
+        .folder-prompts-list { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-in-out; }
+        .is-expanded .folder-prompts-list { max-height: 500px; } /* Altura máxima para la animación */
+        .prompt-title-in-folder {
+            padding: 6px 6px 6px 32px; /* Indentación */
+            font-size: 0.8rem;
+            color: #a0a0a0;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .prompt-title-in-folder:hover { background-color: #2a2a2a; color: #ffffff; }
+
+        /* Modales y otros */
+        .color-picker input[type="color"] { -webkit-appearance: none; border: none; width: 24px; height: 24px; padding: 0; border-radius: 50%; cursor: pointer; }
+        .color-picker input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        .color-picker input[type="color"]::-webkit-color-swatch { border: none; border-radius: 50%; }
+        .editable-input { background: #333; border: 1px solid #555; color: #e0e0e0; padding: 4px 8px; border-radius: 6px; width: 100%; }
+        .view-mode-btn.active { color: #3b82f6; background-color: rgba(59, 130, 246, 0.1); }
+        
+        /* Estilos para los iconos de acción de carpeta */
+        .folder-action-icons { opacity: 0; transition: opacity 0.2s ease; }
+        .folder-item-header:hover .folder-action-icons { opacity: 1; }
+        .folder-rename-btn { cursor: pointer; padding: 2px; border-radius: 4px; }
+        .folder-rename-btn:hover { background-color: #3a3a3a; }
+    </style>
+</head>
+<body class="overflow-hidden">
+
+    <div id="app" class="flex h-screen">
+        <aside id="sidebar" class="sidebar bg-[#161616] w-72 h-full flex flex-col p-4 border-r border-[#2a2a2a]">
+            <div class="flex items-center justify-between mb-6">
+                <h1 class="text-xl font-bold text-white">Carpetas</h1>
+                <div class="flex items-center">
+                    <button id="add-folder-btn" class="p-1 text-gray-400 hover:text-white transition-colors" title="Nueva Carpeta"><i data-lucide="plus-circle" class="w-5 h-5"></i></button>
+                    <button id="delete-folder-btn" class="p-1 text-gray-400 hover:text-red-400 transition-colors ml-2" title="Eliminar Carpeta"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                </div>
+            </div>
+            <div id="folder-list" class="flex-grow overflow-y-auto pr-2"></div>
+        </aside>
+
+        <main class="flex-1 flex flex-col bg-[#1a1a1a]">
+            <header class="flex items-center p-4 border-b border-[#2a2a2a] bg-[#161616]">
+                <button id="toggle-sidebar-btn" class="p-2 mr-4 text-gray-400 hover:text-white"><i data-lucide="panel-left" class="w-5 h-5"></i></button>
+                <div class="flex-1 relative">
+                    <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500"></i>
+                    <input type="text" id="search-input" placeholder="Buscar en esta carpeta..." class="w-full bg-[#2a2a2a] border border-[#3a3a3a] rounded-lg py-2 pl-10 pr-4 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div class="flex items-center ml-4">
+                    <button id="view-grid-btn" class="view-mode-btn p-2 text-gray-400 hover:text-white transition-colors rounded-md"><i data-lucide="layout-grid" class="w-5 h-5"></i></button>
+                    <button id="view-list-btn" class="view-mode-btn p-2 text-gray-400 hover:text-white transition-colors rounded-md"><i data-lucide="list" class="w-5 h-5"></i></button>
+                    <div class="h-6 w-px bg-gray-700 mx-2"></div>
+                    <button id="sort-prompts-btn" class="flex items-center gap-2 p-2 mr-2 text-gray-400 hover:text-white transition-colors rounded-md"><i data-lucide="arrow-down-a-z" class="w-5 h-5"></i><span class="hidden sm:inline">Ordenar</span></button>
+                    <button id="add-prompt-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg flex items-center gap-2 transition-colors"><i data-lucide="plus" class="w-5 h-5"></i><span class="hidden sm:inline">Nuevo Prompt</span></button>
+                </div>
+            </header>
+
+            <div id="prompts-container" class="flex-1 p-6 overflow-y-auto">
+                <h2 id="current-folder-title" class="text-2xl font-bold mb-6 text-white"></h2>
+                <div id="prompts-grid"></div>
+                <div id="no-prompts-message" class="hidden text-center text-gray-500 mt-16"><i data-lucide="inbox" class="w-16 h-16 mx-auto mb-4"></i><p class="text-lg">Esta carpeta está vacía.</p><p>Crea un nuevo prompt para empezar.</p></div>
+                 <div id="no-folder-selected-message" class="text-center text-gray-500 mt-16"><i data-lucide="folder-open" class="w-16 h-16 mx-auto mb-4"></i><p class="text-lg">Selecciona o crea una carpeta</p><p>Tus prompts se organizan en carpetas.</p></div>
+            </div>
+        </main>
+    </div>
+
+    <div id="toast" class="fixed bottom-5 right-5 text-white py-2 px-4 rounded-lg shadow-lg opacity-0 transform translate-y-2 transition-all duration-300"></div>
+
+    <div id="confirm-modal" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-50">
+        <div class="bg-[#1e1e1e] rounded-lg shadow-2xl p-6 w-full max-w-md border border-[#2a2a2a]">
+            <h3 id="modal-title" class="text-xl font-bold text-white mb-3"></h3>
+            <p id="modal-body" class="text-gray-400 mb-6"></p>
+            <div class="flex justify-end gap-3">
+                <button id="modal-cancel-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors">Cancelar</button>
+                <button id="modal-confirm-btn" class="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">Eliminar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="edit-prompt-modal" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden z-50 overflow-y-auto py-6">
+        <div class="bg-[#1e1e1e] rounded-lg shadow-2xl p-6 w-full max-w-3xl border border-[#2a2a2a] my-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold text-white">Editar Prompt</h3>
+                <button id="close-edit-modal-btn" class="text-gray-400 hover:text-white transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
+            </div>
+            <input type="text" id="edit-prompt-title-input" placeholder="Título del Prompt" class="w-full bg-[#2a2a2a] border border-[#3a3a3a] rounded-lg py-2 px-4 text-white mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <textarea id="edit-prompt-text-input" placeholder="Texto del Prompt..." class="w-full bg-[#2a2a2a] border border-[#3a3a3a] rounded-lg py-3 px-4 text-white mb-3 focus:outline-none focus:ring-2 focus:ring-blue-500" rows="10"></textarea>
+            
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-400 mb-2">Adjuntar Archivo (Opcional)</label>
+                <div class="flex items-center gap-2">
+                    <input type="file" id="edit-prompt-file-input" class="hidden">
+                    <button id="edit-prompt-file-btn" class="bg-[#2a2a2a] hover:bg-[#333333] text-white py-2 px-4 rounded-lg flex items-center gap-2 border border-[#3a3a3a] transition-colors"><i data-lucide="paperclip" class="w-4 h-4"></i>Seleccionar Archivo</button>
+                    <span id="edit-prompt-file-name" class="text-sm text-gray-400"></span>
+                    <button id="edit-prompt-remove-file-btn" class="hidden text-red-500 hover:text-red-400 transition-colors"><i data-lucide="x-circle" class="w-5 h-5"></i></button>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-3">
+                <button id="cancel-edit-modal-btn" class="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors">Cancelar</button>
+                <button id="save-edit-modal-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition-colors">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+
+            const state = {
+                data: { folders: [], prompts: [] },
+                selectedFolderId: null,
+                expandedFolderIds: [],
+                draggedItem: null,
+                currentEditingPromptId: null,
+                viewMode: 'grid',
+                searchTerm: ''
+            };
+
+            function loadData() {
+                const stored = localStorage.getItem('promptsApp');
+                if (stored) {
+                    try {
+                        const parsed = JSON.parse(stored);
+                        state.data = parsed.data || { folders: [], prompts: [] };
+                        state.selectedFolderId = parsed.selectedFolderId || null;
+                        state.expandedFolderIds = parsed.expandedFolderIds || [];
+                        state.viewMode = parsed.viewMode || 'grid';
+                    } catch (e) {
+                        console.error('Error loading data:', e);
+                    }
+                }
+                if (state.data.folders.length === 0) {
+                    state.data.folders.push({id: crypto.randomUUID(), name: 'General', color: '#3b82f6', order: 0});
+                    state.selectedFolderId = state.data.folders[0].id;
+                    state.expandedFolderIds.push(state.data.folders[0].id);
+                }
+            }
+
+            function saveState() {
+                localStorage.setItem('promptsApp', JSON.stringify({
+                    data: state.data,
+                    selectedFolderId: state.selectedFolderId,
+                    expandedFolderIds: state.expandedFolderIds,
+                    viewMode: state.viewMode
+                }));
+            }
+
+            function setupUI() {
+                document.getElementById('add-folder-btn').addEventListener('click', addFolder);
+                document.getElementById('delete-folder-btn').addEventListener('click', () => {
+                    if (state.selectedFolderId) {
+                        const folder = state.data.folders.find(f => f.id === state.selectedFolderId);
+                        showConfirmModal('Eliminar Carpeta', `¿Eliminar la carpeta "${folder?.name}"? Se eliminarán todos sus prompts.`, () => deleteFolder(state.selectedFolderId));
+                    } else {
+                        showToast('Selecciona una carpeta para eliminar.', true);
+                    }
+                });
+                document.getElementById('add-prompt-btn').addEventListener('click', addPrompt);
+                document.getElementById('toggle-sidebar-btn').addEventListener('click', () => {
+                    const sidebar = document.getElementById('sidebar');
+                    sidebar.classList.toggle('sidebar-collapsed');
+                });
+                document.getElementById('search-input').addEventListener('input', (e) => {
+                    state.searchTerm = e.target.value.toLowerCase();
+                    render();
+                });
+                document.getElementById('sort-prompts-btn').addEventListener('click', sortPrompts);
+                document.getElementById('view-grid-btn').addEventListener('click', () => setViewMode('grid'));
+                document.getElementById('view-list-btn').addEventListener('click', () => setViewMode('list'));
+
+                document.getElementById('close-edit-modal-btn').addEventListener('click', closeEditPromptModal);
+                document.getElementById('cancel-edit-modal-btn').addEventListener('click', closeEditPromptModal);
+                document.getElementById('save-edit-modal-btn').addEventListener('click', saveEditPromptModal);
+                document.getElementById('edit-prompt-file-btn').addEventListener('click', () => document.getElementById('edit-prompt-file-input').click());
+                document.getElementById('edit-prompt-file-input').addEventListener('change', handleFileSelect);
+                document.getElementById('edit-prompt-remove-file-btn').addEventListener('click', removeFileFromEditModal);
+            }
+
+            function setViewMode(mode) {
+                state.viewMode = mode;
+                saveState();
+                render();
+            }
+
+            function renderFolders() {
+                const container = document.getElementById('folder-list');
+                const sorted = state.data.folders.sort((a, b) => a.order - b.order);
+                container.innerHTML = sorted.map(f => {
+                    const isExpanded = state.expandedFolderIds.includes(f.id);
+                    const isSelected = state.selectedFolderId === f.id;
+                    const promptsInFolder = state.data.prompts.filter(p => p.folderId === f.id).sort((a, b) => a.order - b.order);
+                    return `
+                        <div class="folder-wrapper mb-2" data-id="${f.id}" data-type="folder-wrapper">
+                            <div class="folder-item-header p-3 rounded-lg cursor-pointer flex items-center justify-between ${isSelected ? 'bg-[#2a2a2a]' : 'bg-[#1e1e1e]'}" draggable="true" data-id="${f.id}" data-type="folder">
+                                <div class="flex items-center flex-1 min-w-0" onclick="selectFolder('${f.id}')">
+                                    <i data-lucide="chevron-right" class="w-4 h-4 mr-2 text-gray-400 folder-chevron ${isExpanded ? '' : ''}"></i>
+                                    <div class="w-3 h-3 rounded-full mr-2 flex-shrink-0" style="background-color: ${f.color};"></div>
+                                    <span class="folder-name font-medium text-white truncate">${f.name}</span>
+                                    <span class="ml-2 text-xs text-gray-500">(${promptsInFolder.length})</span>
+                                </div>
+                                <div class="folder-action-icons flex items-center gap-1 ml-2">
+                                    <span class="folder-rename-btn text-gray-400 hover:text-white" onclick="event.stopPropagation(); renameFolderClick('${f.id}')" title="Renombrar carpeta">
+                                        <i data-lucide="pencil" class="w-4 h-4"></i>
+                                    </span>
+                                    <span class="color-picker">
+                                        <input type="color" value="${f.color}" onchange="handleColorChange(event, '${f.id}')" onclick="event.stopPropagation()" title="Cambiar color">
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="folder-prompts-list ${isExpanded ? '' : ''}">
+                                ${promptsInFolder.map(p => `
+                                    <div class="prompt-title-in-folder" onclick="openEditPromptModal('${p.id}')" title="${p.title}">${p.title}</div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+                container.querySelectorAll('.folder-item-header').forEach(el => {
+                    el.addEventListener('dragstart', handleDragStart);
+                    el.addEventListener('dragover', handleDragOver);
+                    el.addEventListener('dragleave', handleDragLeave);
+                    el.addEventListener('drop', handleDrop);
+                });
+
+                lucide.createIcons();
+            }
+
+            function toggleFolderExpansion(folderId) {
+                const idx = state.expandedFolderIds.indexOf(folderId);
+                if (idx === -1) {
+                    state.expandedFolderIds.push(folderId);
+                } else {
+                    state.expandedFolderIds.splice(idx, 1);
+                }
+                saveState();
+                renderFolders();
+                lucide.createIcons();
+            }
+
+            function selectFolder(id) {
+                state.selectedFolderId = id;
+                toggleFolderExpansion(id);
+                state.searchTerm = '';
+                document.getElementById('search-input').value = '';
+                saveState();
+                render();
+            }
+
+            // Nueva función para activar el renombrado de carpeta
+            function renameFolderClick(folderId) {
+                const folderElement = document.querySelector(`.folder-item-header[data-id="${folderId}"] .folder-name`);
+                if (folderElement) {
+                    makeEditable(folderElement, 'folder', folderId);
+                }
+            }
+
+            function renderPrompts() {
+                const grid = document.getElementById('prompts-grid');
+                const noPromptsMsg = document.getElementById('no-prompts-message');
+                const noFolderMsg = document.getElementById('no-folder-selected-message');
+                const titleEl = document.getElementById('current-folder-title');
+
+                if (!state.selectedFolderId) {
+                    grid.innerHTML = '';
+                    noPromptsMsg.classList.add('hidden');
+                    noFolderMsg.classList.remove('hidden');
+                    titleEl.textContent = '';
+                    lucide.createIcons();
+                    return;
+                }
+
+                noFolderMsg.classList.add('hidden');
+                const folder = state.data.folders.find(f => f.id === state.selectedFolderId);
+                titleEl.textContent = folder ? folder.name : 'Carpeta';
+
+                let prompts = state.data.prompts
+                    .filter(p => p.folderId === state.selectedFolderId)
+                    .sort((a, b) => a.order - b.order);
+
+                if (state.searchTerm) {
+                    prompts = prompts.filter(p =>
+                        p.title.toLowerCase().includes(state.searchTerm) ||
+                        p.text.toLowerCase().includes(state.searchTerm)
+                    );
+                }
+
+                if (prompts.length === 0) {
+                    grid.innerHTML = '';
+                    noPromptsMsg.classList.remove('hidden');
+                    lucide.createIcons();
+                    return;
+                }
+
+                noPromptsMsg.classList.add('hidden');
+
+                if (state.viewMode === 'grid') {
+                    grid.className = 'prompts-grid-view grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4';
+                } else {
+                    grid.className = 'prompts-list-view';
+                }
+
+                grid.innerHTML = prompts.map(p => `
+                    <div class="prompt-card bg-[#1e1e1e] rounded-lg p-4 cursor-pointer" draggable="true" data-id="${p.id}" data-type="prompt" onclick="openEditPromptModal('${p.id}')">
+                        <div class="prompt-card-content">
+                            <h3 class="prompt-title text-white font-semibold mb-2 truncate">${p.title}</h3>
+                            <p class="prompt-text text-gray-400 text-sm line-clamp-3">${p.text}</p>
+                            ${p.fileName ? `<div class="mt-2 flex items-center gap-1 text-xs text-blue-400"><i data-lucide="paperclip" class="w-3 h-3"></i><span class="truncate">${p.fileName}</span></div>` : ''}
+                        </div>
+                        <div class="prompt-actions flex justify-end gap-2 mt-3">
+                            <button class="p-1 text-gray-400 hover:text-white transition-colors" onclick="event.stopPropagation(); copyToClipboard(\`${p.text.replace(/`/g, '\\`')}\`)" title="Copiar"><i data-lucide="copy" class="w-4 h-4"></i></button>
+                            <button class="p-1 text-gray-400 hover:text-red-400 transition-colors" onclick="event.stopPropagation(); showConfirmModal('Eliminar Prompt', '¿Eliminar este prompt?', () => deletePrompt('${p.id}'))" title="Eliminar"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                        </div>
+                    </div>
+                `).join('');
+
+                grid.querySelectorAll('.prompt-card').forEach(el => {
+                    el.addEventListener('dragstart', handleDragStart);
+                    el.addEventListener('dragover', handleDragOver);
+                    el.addEventListener('drop', handleDrop);
+                });
+
+                lucide.createIcons();
+            }
+
+            function render() {
+                renderFolders();
+                renderPrompts();
+                
+                document.getElementById('view-grid-btn').classList.toggle('active', state.viewMode === 'grid');
+                document.getElementById('view-list-btn').classList.toggle('active', state.viewMode === 'list');
+            }
+
+            function openEditPromptModal(promptId) {
+                const prompt = state.data.prompts.find(p => p.id === promptId);
+                if (!prompt) return;
+
+                state.currentEditingPromptId = promptId;
+                document.getElementById('edit-prompt-title-input').value = prompt.title;
+                document.getElementById('edit-prompt-text-input').value = prompt.text;
+                
+                const fileNameSpan = document.getElementById('edit-prompt-file-name');
+                const removeFileBtn = document.getElementById('edit-prompt-remove-file-btn');
+                if (prompt.fileName) {
+                    fileNameSpan.textContent = prompt.fileName;
+                    removeFileBtn.classList.remove('hidden');
+                } else {
+                    fileNameSpan.textContent = '';
+                    removeFileBtn.classList.add('hidden');
+                }
+
+                document.getElementById('edit-prompt-modal').classList.remove('hidden');
+                lucide.createIcons();
+            }
+
+            function closeEditPromptModal() {
+                document.getElementById('edit-prompt-modal').classList.add('hidden');
+                document.getElementById('edit-prompt-file-input').value = '';
+                state.currentEditingPromptId = null;
+            }
+
+            function saveEditPromptModal() {
+                const prompt = state.data.prompts.find(p => p.id === state.currentEditingPromptId);
+                if (!prompt) return;
+
+                prompt.title = document.getElementById('edit-prompt-title-input').value || 'Sin título';
+                prompt.text = document.getElementById('edit-prompt-text-input').value || '';
+
+                const fileInput = document.getElementById('edit-prompt-file-input');
+                if (fileInput.files.length > 0) {
+                    const file = fileInput.files[0];
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        prompt.fileData = e.target.result;
+                        prompt.fileName = file.name;
+                        prompt.fileType = file.type;
+                        saveState();
+                        closeEditPromptModal();
+                        render();
+                        showToast('Prompt guardado con archivo.');
+                    };
+                    reader.readAsDataURL(file);
+                } else {
+                    saveState();
+                    closeEditPromptModal();
+                    render();
+                    showToast('Prompt guardado.');
+                }
+            }
+
+            function handleFileSelect(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    document.getElementById('edit-prompt-file-name').textContent = file.name;
+                    document.getElementById('edit-prompt-remove-file-btn').classList.remove('hidden');
+                }
+            }
+
+            function removeFileFromEditModal() {
+                const prompt = state.data.prompts.find(p => p.id === state.currentEditingPromptId);
+                if (prompt) {
+                    prompt.fileData = null;
+                    prompt.fileName = null;
+                    prompt.fileType = null;
+                }
+                document.getElementById('edit-prompt-file-input').value = '';
+                document.getElementById('edit-prompt-file-name').textContent = '';
+                document.getElementById('edit-prompt-remove-file-btn').classList.add('hidden');
+                saveState();
+            }
+            
+            function showToast(message, isError = false) { const t = document.getElementById('toast'); t.textContent = message; t.className = `fixed bottom-5 right-5 text-white py-2 px-4 rounded-lg shadow-lg transition-all duration-300 ${isError ? 'bg-red-500' : 'bg-green-500'}`; t.classList.remove('opacity-0', 'translate-y-2'); setTimeout(() => t.classList.add('opacity-0', 'translate-y-2'), 3000); }
+            function copyToClipboard(text) { navigator.clipboard.writeText(text).then(() => showToast('¡Copiado al portapapeles!')); }
+            function addFolder() { const o = state.data.folders.length > 0 ? Math.max(...state.data.folders.map(f => f.order)) + 1 : 0; const f = {id: crypto.randomUUID(), name: 'Nueva Carpeta', color: '#cccccc', order: o}; state.data.folders.push(f); state.selectedFolderId = f.id; state.expandedFolderIds.push(f.id); saveState(); render(); }
+            function deleteFolder(id) { state.data.folders = state.data.folders.filter(f => f.id !== id); state.data.prompts = state.data.prompts.filter(p => p.folderId !== id); if (state.selectedFolderId === id) { state.selectedFolderId = state.data.folders.length > 0 ? state.data.folders.sort((a,b) => a.order - b.order)[0].id : null; } saveState(); render(); }
+            function addPrompt() { if (!state.selectedFolderId) { showToast("Selecciona una carpeta.", true); return; } const pInF = state.data.prompts.filter(p => p.folderId === state.selectedFolderId); const o = pInF.length > 0 ? Math.max(...pInF.map(p => p.order)) + 1 : 0; const p = {id: crypto.randomUUID(), title: 'Nuevo Prompt', text: 'Escribe aquí...', folderId: state.selectedFolderId, order: o, fileData: null, fileName: null, fileType: null}; state.data.prompts.push(p); saveState(); render(); openEditPromptModal(p.id); }
+            function deletePrompt(id) { state.data.prompts = state.data.prompts.filter(p => p.id !== id); saveState(); render(); }
+            function handleColorChange(e, id) { const f = state.data.folders.find(f => f.id === id); if(f) { f.color = e.target.value; saveState(); renderFolders(); lucide.createIcons(); } }
+            function sortPrompts() { const pInF = state.data.prompts.filter(p => p.folderId === state.selectedFolderId); pInF.sort((a, b) => a.title.localeCompare(b.title)); pInF.forEach((p, i) => { const oP = state.data.prompts.find(op => op.id === p.id); oP.order = i; }); saveState(); render(); }
+            
+            // --- DRAG AND DROP ---
+            function handleDragStart(e) {
+                const draggableTarget = e.target.closest('.folder-item-header, .prompt-card');
+                if (draggableTarget) {
+                    state.draggedItem = draggableTarget;
+                    e.dataTransfer.effectAllowed = 'move';
+                    setTimeout(() => { state.draggedItem.classList.add('ghost'); }, 0);
+                } else {
+                    e.preventDefault();
+                }
+            }
+
+            function handleDragOver(e) {
+                e.preventDefault();
+                if (!state.draggedItem) return;
+
+                const draggedType = state.draggedItem.dataset.type;
+                const dropTarget = e.target.closest('.folder-wrapper, .prompt-card');
+                
+                if (dropTarget && dropTarget !== state.draggedItem.parentElement && dropTarget !== state.draggedItem) {
+                    const dropTargetType = dropTarget.dataset.type;
+                    
+                    if (draggedType === 'folder' && dropTargetType === 'folder-wrapper') {
+                        const folderList = document.getElementById('folder-list');
+                        const draggedWrapper = state.draggedItem.parentElement;
+                        const rect = dropTarget.getBoundingClientRect();
+                        const isAfter = e.clientY > rect.top + rect.height / 2;
+                        folderList.insertBefore(draggedWrapper, isAfter ? dropTarget.nextSibling : dropTarget);
+                    }
+                    
+                    if (draggedType === 'prompt' && dropTargetType === 'prompt') {
+                        const grid = document.getElementById('prompts-grid');
+                        const rect = dropTarget.getBoundingClientRect();
+                        const isAfter = e.clientY > rect.top + rect.height / 2;
+                        grid.insertBefore(state.draggedItem, isAfter ? dropTarget.nextSibling : dropTarget);
+                    }
+                }
+                
+                document.querySelectorAll('.folder-item-header').forEach(f => f.classList.remove('drag-over-folder'));
+                const targetFolderHeader = e.target.closest('.folder-item-header');
+                if (draggedType === 'prompt' && targetFolderHeader) {
+                    targetFolderHeader.classList.add('drag-over-folder');
+                }
+            }
+
+            function handleDragLeave(e) {
+                e.preventDefault();
+                const targetFolderHeader = e.target.closest('.folder-item-header');
+                if (targetFolderHeader) {
+                    targetFolderHeader.classList.remove('drag-over-folder');
+                }
+            }
+
+            function handleDrop(e) {
+                e.preventDefault();
+                if (!state.draggedItem) return;
+
+                state.draggedItem.classList.remove('ghost');
+                document.querySelectorAll('.drag-over-folder').forEach(el => el.classList.remove('drag-over-folder'));
+
+                const draggedId = state.draggedItem.dataset.id;
+                const draggedType = state.draggedItem.dataset.type;
+                
+                const dropTargetFolderHeader = e.target.closest('.folder-item-header');
+                if (draggedType === 'prompt' && dropTargetFolderHeader) {
+                    const prompt = state.data.prompts.find(p => p.id === draggedId);
+                    const newFolderId = dropTargetFolderHeader.dataset.id;
+                    if (prompt && prompt.folderId !== newFolderId) {
+                        prompt.folderId = newFolderId;
+                        const promptsInNewFolder = state.data.prompts.filter(p => p.folderId === newFolderId && p.id !== draggedId);
+                        prompt.order = promptsInNewFolder.length;
+                    }
+                } else if (draggedType === 'folder') {
+                    const folderNodes = document.querySelectorAll('#folder-list .folder-wrapper');
+                    folderNodes.forEach((node, index) => {
+                        const folder = state.data.folders.find(f => f.id === node.dataset.id);
+                        if (folder) folder.order = index;
+                    });
+                } else if (draggedType === 'prompt') {
+                    const promptNodes = document.querySelectorAll('#prompts-grid .prompt-card');
+                    promptNodes.forEach((node, index) => {
+                        const prompt = state.data.prompts.find(p => p.id === node.dataset.id);
+                        if (prompt) prompt.order = index;
+                    });
+                }
+
+                saveState();
+                render();
+                state.draggedItem = null;
+            }
+            
+            showConfirmModal = (title, body, onConfirm) => { const m = document.getElementById('confirm-modal'); m.querySelector('#modal-title').textContent = title; m.querySelector('#modal-body').textContent = body; m.classList.remove('hidden'); const cBtn = m.querySelector('#modal-confirm-btn'), aBtn = m.querySelector('#modal-cancel-btn'); const cH = () => { onConfirm(); hM(); }; const hM = () => { m.classList.add('hidden'); cBtn.removeEventListener('click', cH); }; cBtn.addEventListener('click', cH, { once: true }); aBtn.addEventListener('click', hM, { once: true }); };
+            makeEditable = (element, type, id) => { const oT = element.textContent; const isTA = type.includes('text'); const i = document.createElement(isTA ? 'textarea' : 'input'); if (!isTA) i.type = 'text'; i.value = oT; i.className = 'editable-input'; if (isTA) { i.style.height = '80px'; i.style.resize = 'vertical'; } element.replaceWith(i); i.focus(); i.select(); const sC = () => { const nV = i.value.trim(); if (nV && nV !== oT) { if (type === 'folder') { const f = state.data.folders.find(f => f.id === id); if (f) f.name = nV; } saveState(); } render(); }; i.addEventListener('blur', sC); i.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !isTA) i.blur(); else if (e.key === 'Escape') { i.value = oT; i.blur(); } }); };
+            
+            // Hacer las funciones globales para que puedan ser llamadas desde el HTML inline
+            window.selectFolder = selectFolder;
+            window.renameFolderClick = renameFolderClick;
+            window.handleColorChange = handleColorChange;
+            window.openEditPromptModal = openEditPromptModal;
+            window.copyToClipboard = copyToClipboard;
+            window.showConfirmModal = showConfirmModal;
+            window.deletePrompt = deletePrompt;
+            
+            function loadAndRender() { loadData(); setupUI(); render(); }
+            loadAndRender();
+        });
+    </script>
+</body>
+</html>
